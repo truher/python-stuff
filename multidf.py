@@ -1,46 +1,44 @@
-"""experiment with multiprocessing an enormous dataframe"""
+""" Experiment with multiprocessing an enormous dataframe. """
 import os
 from multiprocessing import Pool
-from multiprocessing import Manager
 from numpy.random import default_rng
 import numpy as np
 import pandas as pd # type:ignore
 import psutil # type:ignore
+from multiprocessing import set_start_method
 
-def worker_fn(wns, wstart, wend):
-    """do some scoring"""
-    print(f"worker {os.getpid()} {len(wns.df)} start {wstart} end {wend}")
+def worker_fn(chunk):
+    """ Scoring goes here. """
     result_1 = []
     result_2 = []
-    for df_row in range(wstart,wend):
-        row = wns.df.iloc[[df_row]]
-        # TODO pick cols by name?
+    # TODO pick cols by name.
+    for i,row in chunk.iterrows():
         result_1.append(np.median(row.values))
         result_2.append(np.mean(row.values))
-    return pd.DataFrame({'median': result_1, 'mean': result_2})
+    print(f"worker {os.getpid()} finished "
+          f"RSS (GB) {psutil.Process(os.getpid()).memory_info().rss/1e9:5.2f} "
+          f"start {min(chunk.index):10d} end {max(chunk.index):10d}")
+    return (result_1, result_2)
+
+def chunks(x, chunk_size):
+    for i in range(0, len(x), chunk_size):
+        yield x[i:i + chunk_size]
+
+def make_df(cols = 40, rows = 100000000):
+    big_df = pd.DataFrame()
+    rng = default_rng()
+    for i in range(cols):
+        print(f"column: {i:3d} RSS (GB): {psutil.Process(os.getpid()).memory_info().rss/1e9:5.2f}")
+        big_df[f'key{i}'] = rng.standard_normal(rows)
+    return big_df
 
 if __name__ == '__main__':
-    #COLUMNS = 40
-    COLUMNS = 4
-    #ROWS = 100000000
-    ROWS = 100
-    CPU = 6
-
-    big_dataframe = pd.DataFrame()
-    rng = default_rng()
-    for i in range(COLUMNS): # yields about 30GB
-        print(f"i: {i:3d} memory (GB): {psutil.Process(os.getpid()).memory_info().rss/1e9:5.2f}")
-        big_dataframe[f'key{i}'] = rng.standard_normal(ROWS)
-
-    mgr = Manager()
-    ns = mgr.Namespace()
-    ns.df = big_dataframe
-    partition_ranges = [[cpu * ROWS // CPU, (cpu + 1) * ROWS // CPU] for cpu in range(CPU)]
-    with Pool(CPU) as p:
-        y = p.starmap(worker_fn, [[ns, start, end] for start, end in partition_ranges])
-
-    yy = pd.concat(y, axis=0).reset_index(drop=True)
-    big_dataframe = pd.concat([big_dataframe, yy], axis=1)
-
-    print("===== OUTPUT")
-    print(big_dataframe)
+    set_start_method("spawn")
+    big_dataframe = make_df()
+    with Pool(processes = 6) as pool:
+        result_shards = pool.imap(worker_fn, chunks(big_dataframe, 10000))
+        result_columns = np.concatenate(list(result_shards), axis=1)
+        big_dataframe['median'] = result_columns[0]
+        big_dataframe['mean'] = result_columns[1]
+        print("===== OUTPUT")
+        print(big_dataframe)
