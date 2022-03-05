@@ -1,4 +1,8 @@
-""" Classify the candidates (parallel map).  """
+"""
+Classify the candidates (parallel map).
+
+On my 6-core machine, runs about 1.2M row/sec
+"""
 from multiprocessing import Pool
 from multiprocessing import set_start_method
 import pickle
